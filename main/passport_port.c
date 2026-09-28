@@ -1,4 +1,5 @@
 #include "wp7_ui.h"
+#include "passport_wifi.h"
 
 #include <stdlib.h>
 
@@ -21,6 +22,7 @@ typedef struct {
 
 static QueueHandle_t s_keys;
 static QueueHandle_t s_battery_updates;
+static QueueHandle_t s_wifi_updates;
 static const char *TAG = "passport_wp7";
 
 typedef struct {
@@ -50,6 +52,7 @@ static void button_cb(bsp_btn_t button, bsp_btn_ev_t event, void *user)
 {
     (void)user;
     if (event != BSP_BTN_CLICK && event != BSP_BTN_LONG) return;
+    ESP_LOGI(TAG, "Button event: btn=%d, ev=%d", (int)button, (int)event);
     input_event_t input = {
         .key = (wp7_key_t)button,
         .long_press = event == BSP_BTN_LONG,
@@ -77,6 +80,8 @@ void app_main(void)
     ESP_ERROR_CHECK(s_keys ? ESP_OK : ESP_ERR_NO_MEM);
     s_battery_updates = xQueueCreate(1, sizeof(battery_update_t));
     ESP_ERROR_CHECK(s_battery_updates ? ESP_OK : ESP_ERR_NO_MEM);
+    s_wifi_updates = xQueueCreate(1, sizeof(wp7_wifi_status_t));
+    ESP_ERROR_CHECK(s_wifi_updates ? ESP_OK : ESP_ERR_NO_MEM);
     ESP_ERROR_CHECK(bsp_button_init(button_cb, NULL));
     if (xTaskCreate(battery_task, "passport_battery", 4096, NULL, 2, NULL) != pdPASS) {
         ESP_LOGW(TAG, "battery task unavailable");
@@ -89,12 +94,19 @@ void app_main(void)
     if (ble_err != ESP_OK) {
         ESP_LOGE(TAG, "BLE link unavailable: %s", esp_err_to_name(ble_err));
     }
+    passport_wifi_init(s_wifi_updates);
+    if (bsp_lvgl_lock(1000)) {
+        wp7_ui_set_ble(usage_link_connected() ? WP7_BLE_CONNECTED : WP7_BLE_ADVERTISING);
+        bsp_lvgl_unlock();
+    }
     ESP_LOGI(TAG, "WP7 launcher ready, 240x320 RGB565, heap free=%u largest=%u",
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
 
     input_event_t input;
     battery_update_t battery;
+    wp7_wifi_status_t wifi;
+    bool last_ble = usage_link_connected();
     while (true) {
         if (xQueueReceive(s_keys, &input, pdMS_TO_TICKS(250)) == pdTRUE &&
                 bsp_lvgl_lock(1000)) {
@@ -104,6 +116,17 @@ void app_main(void)
         if (xQueueReceive(s_battery_updates, &battery, 0) == pdTRUE &&
                 bsp_lvgl_lock(1000)) {
             wp7_ui_set_battery(battery.soc, battery.mv);
+            bsp_lvgl_unlock();
+        }
+        if (xQueueReceive(s_wifi_updates, &wifi, 0) == pdTRUE &&
+                bsp_lvgl_lock(1000)) {
+            wp7_ui_set_wifi(wifi);
+            bsp_lvgl_unlock();
+        }
+        bool ble = usage_link_connected();
+        if (ble != last_ble && bsp_lvgl_lock(1000)) {
+            last_ble = ble;
+            wp7_ui_set_ble(ble ? WP7_BLE_CONNECTED : WP7_BLE_ADVERTISING);
             bsp_lvgl_unlock();
         }
     }

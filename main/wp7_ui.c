@@ -165,9 +165,13 @@ typedef struct {
     wp7_list_item_t list_items[WP7_MAX_LIST_ITEMS];
     wp7_setting_item_t settings_items[WP7_SETTINGS_CONTENT_COUNT];
     lv_obj_t *status_bar;
+    lv_obj_t *status_left_cont;
     lv_obj_t *status_wifi_label;
+    lv_obj_t *status_ble_label;
     lv_obj_t *status_time_label;
     lv_obj_t *status_battery_label;
+    wp7_wifi_status_t wifi_status;
+    wp7_ble_status_t ble_status;
     lv_obj_t *settings_title;
     lv_obj_t *brightness_slider;
     lv_obj_t *mode_switch;
@@ -1130,6 +1134,10 @@ static void apply_color_scheme(void)
 
     if (s_wp7.status_wifi_label != NULL) {
         lv_obj_set_style_text_color(s_wp7.status_wifi_label, ui_text_color(), 0);
+    }
+
+    if (s_wp7.status_ble_label != NULL) {
+        lv_obj_set_style_text_color(s_wp7.status_ble_label, ui_text_color(), 0);
     }
 
     if (s_wp7.status_time_label != NULL) {
@@ -3407,13 +3415,30 @@ static void create_status_bar(lv_obj_t *screen, int32_t screen_w, int32_t status
     lv_obj_add_flag(bar, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_EVENT_BUBBLE);
     s_wp7.status_bar = bar;
 
-    lv_obj_t *wifi_label = lv_label_create(bar);
-    lv_label_set_text(wifi_label, LV_SYMBOL_WIFI);
+    lv_obj_t *left_cont = lv_obj_create(bar);
+    lv_obj_remove_style_all(left_cont);
+    lv_obj_set_size(left_cont, LV_SIZE_CONTENT, status_h);
+    lv_obj_align(left_cont, LV_ALIGN_LEFT_MID, pad, 0);
+    lv_obj_set_flex_flow(left_cont, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(left_cont, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(left_cont, 5, 0);
+    lv_obj_remove_flag(left_cont, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(left_cont, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_EVENT_BUBBLE);
+    s_wp7.status_left_cont = left_cont;
+
+    lv_obj_t *wifi_label = lv_label_create(left_cont);
+    lv_label_set_text(wifi_label, "");
     lv_obj_set_style_text_color(wifi_label, ui_text_color(), 0);
     lv_obj_set_style_text_font(wifi_label, &lv_font_montserrat_14, 0);
-    lv_obj_align(wifi_label, LV_ALIGN_LEFT_MID, pad, 0);
     lv_obj_add_flag(wifi_label, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_EVENT_BUBBLE);
     s_wp7.status_wifi_label = wifi_label;
+
+    lv_obj_t *ble_label = lv_label_create(left_cont);
+    lv_label_set_text(ble_label, "");
+    lv_obj_set_style_text_color(ble_label, ui_text_color(), 0);
+    lv_obj_set_style_text_font(ble_label, &lv_font_montserrat_14, 0);
+    lv_obj_add_flag(ble_label, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_EVENT_BUBBLE);
+    s_wp7.status_ble_label = ble_label;
 
     lv_obj_t *time_label = lv_label_create(bar);
     lv_label_set_text(time_label, "--:--");
@@ -3431,6 +3456,9 @@ static void create_status_bar(lv_obj_t *screen, int32_t screen_w, int32_t status
     lv_obj_align(battery_label, LV_ALIGN_RIGHT_MID, -pad, 0);
     lv_obj_add_flag(battery_label, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_EVENT_BUBBLE);
     s_wp7.status_battery_label = battery_label;
+
+    wp7_ui_set_wifi(s_wp7.wifi_status);
+    wp7_ui_set_ble(s_wp7.ble_status);
 }
 
 static void create_tile_grid(lv_obj_t *screen, int32_t screen_w, int32_t screen_h, int32_t status_h)
@@ -3993,7 +4021,57 @@ void wp7_ui_set_battery(int soc, int mv)
     wp7_apps_set_battery(soc, mv);
     /* A failed read (-1) keeps the last icon rather than flashing empty. */
     if (soc >= 0 && s_wp7.status_battery_label != NULL) {
-        lv_label_set_text(s_wp7.status_battery_label, battery_symbol(soc));
+        char text[16];
+        snprintf(text, sizeof(text), "%d%% %s", soc > 100 ? 100 : soc, battery_symbol(soc));
+        lv_label_set_text(s_wp7.status_battery_label, text);
+    }
+}
+
+void wp7_ui_set_wifi(wp7_wifi_status_t status)
+{
+    s_wp7.wifi_status = status;
+    if (s_wp7.status_wifi_label == NULL) return;
+
+    switch (status) {
+        case WP7_WIFI_CONNECTED:
+            lv_label_set_text(s_wp7.status_wifi_label, LV_SYMBOL_WIFI);
+            lv_obj_set_style_opa(s_wp7.status_wifi_label, LV_OPA_COVER, 0);
+            lv_obj_remove_flag(s_wp7.status_wifi_label, LV_OBJ_FLAG_HIDDEN);
+            break;
+        case WP7_WIFI_CONNECTING:
+            lv_label_set_text(s_wp7.status_wifi_label, LV_SYMBOL_WIFI);
+            lv_obj_set_style_opa(s_wp7.status_wifi_label, LV_OPA_40, 0);
+            lv_obj_remove_flag(s_wp7.status_wifi_label, LV_OBJ_FLAG_HIDDEN);
+            break;
+        case WP7_WIFI_DISCONNECTED:
+        default:
+            lv_label_set_text(s_wp7.status_wifi_label, "");
+            lv_obj_add_flag(s_wp7.status_wifi_label, LV_OBJ_FLAG_HIDDEN);
+            break;
+    }
+}
+
+void wp7_ui_set_ble(wp7_ble_status_t status)
+{
+    s_wp7.ble_status = status;
+    if (s_wp7.status_ble_label == NULL) return;
+
+    switch (status) {
+        case WP7_BLE_CONNECTED:
+            lv_label_set_text(s_wp7.status_ble_label, LV_SYMBOL_BLUETOOTH);
+            lv_obj_set_style_opa(s_wp7.status_ble_label, LV_OPA_COVER, 0);
+            lv_obj_remove_flag(s_wp7.status_ble_label, LV_OBJ_FLAG_HIDDEN);
+            break;
+        case WP7_BLE_ADVERTISING:
+            lv_label_set_text(s_wp7.status_ble_label, LV_SYMBOL_BLUETOOTH);
+            lv_obj_set_style_opa(s_wp7.status_ble_label, LV_OPA_50, 0);
+            lv_obj_remove_flag(s_wp7.status_ble_label, LV_OBJ_FLAG_HIDDEN);
+            break;
+        case WP7_BLE_DISABLED:
+        default:
+            lv_label_set_text(s_wp7.status_ble_label, "");
+            lv_obj_add_flag(s_wp7.status_ble_label, LV_OBJ_FLAG_HIDDEN);
+            break;
     }
 }
 
