@@ -3984,6 +3984,7 @@ static const char *battery_symbol(int soc)
         LV_SYMBOL_BATTERY_EMPTY, LV_SYMBOL_BATTERY_1, LV_SYMBOL_BATTERY_2,
         LV_SYMBOL_BATTERY_3, LV_SYMBOL_BATTERY_FULL,
     };
+    if (soc < 0) soc = 0;
     if (soc > 100) soc = 100;
     return symbols[(soc + 12) / 25];
 }
@@ -3993,7 +3994,9 @@ void wp7_ui_set_battery(int soc, int mv)
     wp7_apps_set_battery(soc, mv);
     /* A failed read (-1) keeps the last icon rather than flashing empty. */
     if (soc >= 0 && s_wp7.status_battery_label != NULL) {
-        lv_label_set_text(s_wp7.status_battery_label, battery_symbol(soc));
+        char text[16];
+        snprintf(text, sizeof(text), "%d%% %s", soc > 100 ? 100 : soc, battery_symbol(soc));
+        lv_label_set_text(s_wp7.status_battery_label, text);
     }
 }
 
