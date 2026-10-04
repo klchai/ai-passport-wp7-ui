@@ -17,6 +17,8 @@ typedef enum {
 
 void wp7_apps_init(lv_obj_t *status_time_label);
 void wp7_apps_set_battery(int soc, int mv);
+/* False when Bluetooth failed to start, so the usage pages stop waiting. */
+void wp7_apps_set_ble_available(bool available);
 bool wp7_apps_open(lv_obj_t *screen, wp7_app_id_t app, int32_t status_h,
                    lv_color_t bg, lv_color_t text, lv_color_t accent);
 void wp7_apps_close(void);

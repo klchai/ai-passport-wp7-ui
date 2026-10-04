@@ -32,15 +32,20 @@
 #define WP7_LIST_ROW_H_PERMILLE      78
 #define WP7_LIST_ROW_GAP_PERMILLE    18
 #define WP7_TILE_PROGRESS_UNIT       1000
-#define WP7_TILE_STAGGER_UNIT        (WP7_TILE_PROGRESS_UNIT / 2)
+/* Each item moves for one progress unit and the next starts a quarter unit
+   later (an eighth with fast animations), so neighbors overlap. Upstream
+   started each item only after the previous one finished, which took about
+   3.4 s to open UI Settings at the default speed; keys are ignored meanwhile. */
+#define WP7_TILE_STAGGER_UNIT        (WP7_TILE_PROGRESS_UNIT / 4)
+#define WP7_TILE_FAST_STAGGER_UNIT   (WP7_TILE_PROGRESS_UNIT / 8)
 #define WP7_PAGE_BLANK_HOLD_MS       80
 #define WP7_DRAG_DISTANCE_PERMILLE   550
 #define WP7_DRAG_THRESHOLD_PERMILLE  20
 #define WP7_RELEASE_COMMIT_PERMILLE  220
 #define WP7_BASE_PROGRESS_PER_MS     8
 #define WP7_BASE_RELEASE_MIN_MS      620
-#define WP7_SETTINGS_TILE_PHASE_UNIT (WP7_TILE_PROGRESS_UNIT * 2)
-#define WP7_SETTINGS_TITLE_PHASE_UNIT (WP7_TILE_PROGRESS_UNIT * 3 / 2)
+#define WP7_SETTINGS_TILE_PHASE_UNIT (WP7_TILE_PROGRESS_UNIT * 6 / 5)
+#define WP7_SETTINGS_TITLE_PHASE_UNIT WP7_TILE_PROGRESS_UNIT
 #define WP7_SETTINGS_TILE_INDEX      5
 #define WP7_SETTINGS_CONTENT_COUNT   12
 #define WP7_ANIM_SPEED_MIN           50
@@ -259,6 +264,24 @@ typedef struct {
 
 static wp7_screen_t s_wp7;
 
+/* App list rows. Transitions create and destroy the list page part way
+   through, so its length must not depend on whether the page exists: the
+   list-to-tiles transition used to recount 9 rows after the blank phase had
+   destroyed the 7-row list, step back into the slide-out phase and touch rows
+   that do not exist. */
+static const char *const s_list_labels[] = {
+    "Kaboo",
+    "Claude",
+    "Clock",
+    "Battery",
+    "Stopwatch",
+    "Focus timer",
+    "UI Settings",
+};
+#define WP7_LIST_ITEM_COUNT ((int32_t)(sizeof(s_list_labels) / sizeof(s_list_labels[0])))
+_Static_assert(sizeof(s_list_labels) / sizeof(s_list_labels[0]) <= WP7_MAX_LIST_ITEMS,
+               "the app list must fit WP7_MAX_LIST_ITEMS");
+
 static void create_list_page(lv_obj_t *screen, int32_t screen_w, int32_t screen_h, int32_t status_h);
 static void create_settings_page(lv_obj_t *screen, int32_t screen_w, int32_t screen_h, int32_t status_h);
 static void key_render_focus(void);
@@ -309,7 +332,7 @@ static int32_t abs_i32(int32_t value)
 
 static int32_t animation_stagger_unit(void)
 {
-    return s_wp7.fast_animations ? WP7_TILE_STAGGER_UNIT : WP7_TILE_PROGRESS_UNIT;
+    return s_wp7.fast_animations ? WP7_TILE_FAST_STAGGER_UNIT : WP7_TILE_STAGGER_UNIT;
 }
 
 static int32_t staggered_phase_max(int32_t item_count)
@@ -339,7 +362,7 @@ static int32_t settings_other_tile_count(void)
 
 static int32_t list_transition_count(void)
 {
-    return s_wp7.list_count > 0 ? s_wp7.list_count : WP7_MAX_LIST_ITEMS;
+    return WP7_LIST_ITEM_COUNT;
 }
 
 static int32_t settings_other_list_count(void)
@@ -728,46 +751,90 @@ static void load_ui_settings(void)
     nvs_close(handle);
 }
 
-static void save_u16_setting(const char *key, uint16_t value)
+/* Settings are written once, a second after the last change. A flash write
+   stalls the whole CPU, so writing on every key press made the slider and
+   color animations of that press stutter. */
+#define WP7_SAVE_DELAY_MS            1000
+#define WP7_SAVE_SPEED               (1u << 0)
+#define WP7_SAVE_BRIGHTNESS          (1u << 1)
+#define WP7_SAVE_THEME               (1u << 2)
+#define WP7_SAVE_DARK                (1u << 3)
+#define WP7_SAVE_FAST                (1u << 4)
+
+static uint8_t s_pending_saves;
+static lv_timer_t *s_save_timer;
+
+static void flush_settings_cb(lv_timer_t *timer)
 {
     nvs_handle_t handle;
+    const uint8_t pending = s_pending_saves;
 
-    if (nvs_open(WP7_NVS_NAMESPACE, NVS_READWRITE, &handle) != ESP_OK) {
+    lv_timer_pause(timer);
+    s_pending_saves = 0;
+
+    if (pending == 0 || nvs_open(WP7_NVS_NAMESPACE, NVS_READWRITE, &handle) != ESP_OK) {
         return;
     }
 
-    if (nvs_set_u16(handle, key, value) == ESP_OK) {
-        nvs_commit(handle);
+    if (pending & WP7_SAVE_SPEED) {
+        nvs_set_u16(handle, WP7_NVS_SPEED_KEY,
+                    (uint16_t)sanitize_animation_speed(s_wp7.anim_speed_percent));
+    }
+    if (pending & WP7_SAVE_BRIGHTNESS) {
+        nvs_set_u16(handle, WP7_NVS_BRIGHTNESS_KEY,
+                    (uint16_t)sanitize_brightness(s_wp7.brightness_percent));
+    }
+    if (pending & WP7_SAVE_THEME) {
+        nvs_set_u16(handle, WP7_NVS_THEME_KEY, (uint16_t)sanitize_theme_index(s_wp7.theme_index));
+    }
+    if (pending & WP7_SAVE_DARK) {
+        nvs_set_u16(handle, WP7_NVS_DARK_KEY, s_wp7.dark_mode ? 1 : 0);
+    }
+    if (pending & WP7_SAVE_FAST) {
+        nvs_set_u16(handle, WP7_NVS_FAST_KEY, s_wp7.fast_animations ? 1 : 0);
     }
 
+    nvs_commit(handle);
     nvs_close(handle);
+}
+
+static void schedule_settings_save(uint8_t setting)
+{
+    if (s_save_timer == NULL) {
+        s_save_timer = lv_timer_create(flush_settings_cb, WP7_SAVE_DELAY_MS, NULL);
+        if (s_save_timer == NULL) {
+            return;
+        }
+    }
+
+    s_pending_saves |= setting;
+    lv_timer_reset(s_save_timer);
+    lv_timer_resume(s_save_timer);
 }
 
 static void save_animation_speed(void)
 {
-    save_u16_setting(WP7_NVS_SPEED_KEY,
-                     (uint16_t)sanitize_animation_speed(s_wp7.anim_speed_percent));
+    schedule_settings_save(WP7_SAVE_SPEED);
 }
 
 static void save_brightness(void)
 {
-    save_u16_setting(WP7_NVS_BRIGHTNESS_KEY,
-                     (uint16_t)sanitize_brightness(s_wp7.brightness_percent));
+    schedule_settings_save(WP7_SAVE_BRIGHTNESS);
 }
 
 static void save_theme(void)
 {
-    save_u16_setting(WP7_NVS_THEME_KEY, (uint16_t)sanitize_theme_index(s_wp7.theme_index));
+    schedule_settings_save(WP7_SAVE_THEME);
 }
 
 static void save_dark_mode(void)
 {
-    save_u16_setting(WP7_NVS_DARK_KEY, s_wp7.dark_mode ? 1 : 0);
+    schedule_settings_save(WP7_SAVE_DARK);
 }
 
 static void save_fast_animations(void)
 {
-    save_u16_setting(WP7_NVS_FAST_KEY, s_wp7.fast_animations ? 1 : 0);
+    schedule_settings_save(WP7_SAVE_FAST);
 }
 
 static int32_t current_knob_extend(lv_obj_t *slider)
@@ -1335,6 +1402,11 @@ static void set_list_item_visual_style(wp7_list_item_t *item, lv_opa_t opa, int3
 static void set_list_item_box(wp7_list_item_t *item, int32_t x, lv_opa_t opa, int32_t scale)
 {
     bool layout_changed = false;
+
+    /* Rows of a destroyed list page are zeroed; never touch their objects. */
+    if (item->obj == NULL) {
+        return;
+    }
 
     if (opa == 0 || scale <= 0) {
         set_list_item_hidden(item, true);
@@ -3545,15 +3617,6 @@ static void create_tile_grid(lv_obj_t *screen, int32_t screen_w, int32_t screen_
 
 static void create_list_page(lv_obj_t *screen, int32_t screen_w, int32_t screen_h, int32_t status_h)
 {
-    static const char * const item_labels[] = {
-        "Kaboo",
-        "Claude",
-        "Clock",
-        "Battery",
-        "Stopwatch",
-        "Focus timer",
-        "UI Settings",
-    };
     const int32_t gap = scaled_px(screen_h, WP7_LIST_ROW_GAP_PERMILLE);
     const int32_t row_h = scaled_px(screen_h, WP7_LIST_ROW_H_PERMILLE);
     const int32_t content_top = status_h + scaled_px(screen_h, 72);
@@ -3562,11 +3625,7 @@ static void create_list_page(lv_obj_t *screen, int32_t screen_w, int32_t screen_
                           scaled_px(screen_w, WP7_LIST_RIGHT_OFFSET_PERMILLE);
     const int32_t icon_size = row_h * 7 / 10;
 
-    s_wp7.list_count = (int32_t)(sizeof(item_labels) / sizeof(item_labels[0]));
-
-    if (s_wp7.list_count > WP7_MAX_LIST_ITEMS) {
-        s_wp7.list_count = WP7_MAX_LIST_ITEMS;
-    }
+    s_wp7.list_count = WP7_LIST_ITEM_COUNT;
 
     for (int32_t i = 0; i < s_wp7.list_count; i++) {
         lv_obj_t *item_obj = lv_obj_create(screen);
@@ -3606,14 +3665,14 @@ static void create_list_page(lv_obj_t *screen, int32_t screen_w, int32_t screen_
         lv_obj_add_flag(icon, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_EVENT_BUBBLE);
 
         lv_obj_t *icon_label = lv_label_create(icon);
-        lv_label_set_text_fmt(icon_label, "%c", item_labels[i % (sizeof(item_labels) / sizeof(item_labels[0]))][0]);
+        lv_label_set_text_fmt(icon_label, "%c", s_list_labels[i][0]);
         lv_obj_set_style_text_color(icon_label, theme_text_color(), 0);
         lv_obj_set_style_text_font(icon_label, &lv_font_montserrat_14, 0);
         lv_obj_center(icon_label);
         lv_obj_add_flag(icon_label, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_EVENT_BUBBLE);
 
         lv_obj_t *label = lv_label_create(item_obj);
-        lv_label_set_text(label, item_labels[i % (sizeof(item_labels) / sizeof(item_labels[0]))]);
+        lv_label_set_text(label, s_list_labels[i]);
         lv_obj_set_style_text_color(label, ui_text_color(), 0);
         lv_obj_set_style_text_font(label, &lv_font_montserrat_16, 0);
         lv_obj_align_to(label, icon, LV_ALIGN_OUT_RIGHT_MID, scaled_px(screen_w, 28), 0);
@@ -4005,6 +4064,11 @@ void wp7_ui_start(void)
     set_brightness_immediate(s_wp7.brightness_percent);
 }
 
+int32_t wp7_ui_anim_ms(int32_t base_ms)
+{
+    return scaled_ui_anim_ms(base_ms);
+}
+
 static const char *battery_symbol(int soc)
 {
     /* Five glyphs, each centred on 0/25/50/75/100%. */
@@ -4054,6 +4118,7 @@ void wp7_ui_set_wifi(wp7_wifi_status_t status)
 void wp7_ui_set_ble(wp7_ble_status_t status)
 {
     s_wp7.ble_status = status;
+    wp7_apps_set_ble_available(status != WP7_BLE_DISABLED);
     if (s_wp7.status_ble_label == NULL) return;
 
     switch (status) {
@@ -4138,8 +4203,11 @@ static void key_change_setting(void)
 {
     switch (s_wp7.key_setting_index) {
         case 0: {
+            /* Stop at the maximum before wrapping so 100% stays reachable:
+               100 -> 5 -> 15 ... 95 -> 100. */
             int32_t next = s_wp7.brightness_percent + 10;
-            if (next > WP7_BRIGHTNESS_MAX) next = WP7_BRIGHTNESS_MIN;
+            if (s_wp7.brightness_percent >= WP7_BRIGHTNESS_MAX) next = WP7_BRIGHTNESS_MIN;
+            else if (next > WP7_BRIGHTNESS_MAX) next = WP7_BRIGHTNESS_MAX;
             animate_brightness_to(next);
             lv_slider_set_value(s_wp7.brightness_slider, next, LV_ANIM_ON);
             save_brightness();
@@ -4183,9 +4251,55 @@ static void key_change_setting(void)
     key_render_focus();
 }
 
+/* OK sinks the focused tile or list row in, like a touch press, while the key
+   is held; the action runs on release or long press. */
+void wp7_ui_key_down(wp7_key_t key)
+{
+    if (key != WP7_KEY_OK || s_wp7.animating || s_wp7.drag_active ||
+            wp7_apps_active() || s_wp7.in_settings) {
+        return;
+    }
+
+    if (s_wp7.in_list) {
+        if (s_wp7.key_list_index >= 0 && s_wp7.key_list_index < s_wp7.list_count) {
+            start_list_item_press_anim(&s_wp7.list_items[s_wp7.key_list_index], true);
+        }
+    } else if (s_wp7.page == 0 && s_wp7.key_tile_index >= 0 &&
+               s_wp7.key_tile_index < s_wp7.tile_count) {
+        start_tile_press_anim(&s_wp7.tiles[s_wp7.key_tile_index], true);
+    }
+}
+
+/* Restores a tile or row pressed by wp7_ui_key_down() before an action takes
+   over its geometry. */
+static void release_key_press(void)
+{
+    if (s_wp7.in_list) {
+        release_list_press_for_transition();
+        return;
+    }
+
+    for (int32_t i = 0; i < s_wp7.tile_count; i++) {
+        wp7_tile_t *tile = &s_wp7.tiles[i];
+
+        if (tile->obj == NULL || (!tile->press_active && !tile->press_animating)) {
+            continue;
+        }
+
+        lv_anim_del(tile, tile_press_scale_anim_cb);
+        tile->press_active = false;
+        tile->press_animating = false;
+        tile->press_releasing = false;
+        set_tile_press_scale(tile, WP7_OBJ_RELEASE_SCALE);
+    }
+}
+
 void wp7_ui_key(wp7_key_t key, bool long_press)
 {
     if (s_wp7.animating || s_wp7.drag_active) return;
+    if (key == WP7_KEY_OK && !wp7_apps_active() && !s_wp7.in_settings) {
+        release_key_press();
+    }
     if (wp7_apps_active()) {
         if (key == WP7_KEY_OK && long_press) {
             wp7_apps_close();

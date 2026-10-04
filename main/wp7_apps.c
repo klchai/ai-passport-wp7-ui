@@ -20,6 +20,9 @@ static lv_obj_t *s_status_time;
 static lv_timer_t *s_timer;
 static wp7_app_id_t s_app;
 static bool s_clock_known;
+/* Set from the Mac's push rather than by hand; generation of that push. */
+static bool s_clock_synced;
+static uint32_t s_clock_generation;
 static uint64_t s_clock_base_s;
 static uint64_t s_clock_base_ms;
 static int16_t s_clock_timezone;
@@ -31,6 +34,10 @@ static uint64_t s_stopwatch_lap_ms;
 static uint32_t s_stopwatch_laps;
 static bool s_stopwatch_running;
 static uint32_t s_focus_preset = 1;
+static uint64_t s_focus_left_ms = 25 * 60000ULL;
+static uint64_t s_focus_start_ms;
+static bool s_focus_running;
+static bool s_ble_available = true;
 
 /* Usage pages. Kaboo shows token count, cost and top model for one of three
    periods; Claude shows two quota windows, each a label, percentage, bar and
@@ -46,10 +53,18 @@ static uint32_t s_focus_preset = 1;
 #define QUOTA_ALERT_PCT    90
 #define QUOTA_WARN_HEX     0xE3C800
 #define QUOTA_ALERT_HEX    0xE51400
+/* Bars grow to each new reading, including the first after the page opens. */
+#define QUOTA_BAR_ANIM_MS  420
+/* Switching the Kaboo period slides the numbers out and the new ones in, like
+   a WP7 pivot: the first half of the progress range leaves, the second enters. */
+#define KABOO_SLIDE_MS     300
+#define KABOO_SLIDE_PX     24
+#define KABOO_SLIDE_HALF   1000
 typedef struct {
     lv_obj_t *pct;
     lv_obj_t *bar;
     lv_obj_t *reset;
+    int32_t bar_target;
 } quota_row_t;
 static quota_row_t s_quota[2];
 static lv_obj_t *s_note;
@@ -58,11 +73,12 @@ static lv_obj_t *s_kaboo_tokens;
 static lv_obj_t *s_kaboo_cost;
 static lv_obj_t *s_kaboo_model;
 static uint32_t s_kaboo_period;
+static uint32_t s_kaboo_shown;   /* period whose numbers are on screen */
+static int32_t s_kaboo_slide_dir;
 static lv_color_t s_text_color;
 static lv_color_t s_accent_color;
-static uint64_t s_focus_left_ms = 25 * 60000ULL;
-static uint64_t s_focus_start_ms;
-static bool s_focus_running;
+
+static void refresh(lv_timer_t *timer);
 
 static uint64_t now_ms(void)
 {
@@ -130,11 +146,33 @@ static void set_color_if_changed(lv_obj_t *obj, lv_color_t color)
     }
 }
 
+static void bar_width_anim_cb(void *bar, int32_t width)
+{
+    lv_obj_set_width((lv_obj_t *)bar, width);
+}
+
+static void quota_bar_set(quota_row_t *row, int32_t width)
+{
+    if (row->bar_target == width) return;
+    row->bar_target = width;
+
+    /* The bar object is the animation's var, so deleting the page stops it. */
+    lv_anim_delete(row->bar, bar_width_anim_cb);
+    lv_anim_t anim;
+    lv_anim_init(&anim);
+    lv_anim_set_var(&anim, row->bar);
+    lv_anim_set_exec_cb(&anim, bar_width_anim_cb);
+    lv_anim_set_values(&anim, lv_obj_get_style_width(row->bar, 0), width);
+    lv_anim_set_duration(&anim, wp7_ui_anim_ms(QUOTA_BAR_ANIM_MS));
+    lv_anim_set_path_cb(&anim, lv_anim_path_ease_out);
+    lv_anim_start(&anim);
+}
+
 static void quota_row_blank(quota_row_t *row, const char *reset)
 {
     set_text_if_changed(row->pct, "--");
     set_color_if_changed(row->pct, s_text_color);
-    if (lv_obj_get_width(row->bar) != 0) lv_obj_set_width(row->bar, 0);
+    quota_bar_set(row, 0);
     set_text_if_changed(row->reset, reset);
 }
 
@@ -151,8 +189,7 @@ static void quota_row_show(quota_row_t *row, uint8_t pct, uint32_t resets_unix,
     char text[40];
     snprintf(text, sizeof(text), "%u%%", (unsigned)pct);
     set_text_if_changed(row->pct, text);
-    const int32_t width = QUOTA_BAR_W * pct / 100;
-    if (lv_obj_get_width(row->bar) != width) lv_obj_set_width(row->bar, width);
+    quota_bar_set(row, QUOTA_BAR_W * pct / 100);
 
     /* Past the reset time the percentage belongs to the previous window. */
     const bool expired = have_now && usage_model_quota_expired(resets_unix, now_unix);
@@ -225,7 +262,12 @@ static void format_tokens(char *out, size_t size, uint64_t tokens)
     snprintf(out, size, "%" PRIu64, tokens);
 }
 
-static void refresh_kaboo(void)
+static const char *no_data_note(void)
+{
+    return s_ble_available ? "Waiting for Mac" : "Bluetooth unavailable";
+}
+
+static void refresh_kaboo(const usage_snapshot_t *snap, bool have)
 {
     for (uint32_t i = 0; i < KABOO_PERIOD_COUNT; ++i) {
         const lv_opa_t opa = i == s_kaboo_period ? LV_OPA_COVER : LV_OPA_40;
@@ -234,73 +276,142 @@ static void refresh_kaboo(void)
         }
     }
 
-    usage_snapshot_t snap;
-    const bool have = usage_link_get(&snap, NULL);
-    if (!have || !(snap.flags & USAGE_FLAG_KABOO_VALID)) {
+    if (!have || !(snap->flags & USAGE_FLAG_KABOO_VALID)) {
         set_text_if_changed(s_kaboo_tokens, "--");
         set_text_if_changed(s_kaboo_cost, "--");
         set_text_if_changed(s_kaboo_model, "--");
-        set_text_if_changed(s_note, have ? "No Kaboo data" : "Waiting for Mac");
+        set_text_if_changed(s_note, have ? "No Kaboo data" : no_data_note());
         set_color_if_changed(s_note, lv_color_hex(USAGE_WARNING_HEX));
         return;
     }
 
-    uint64_t tokens = snap.today_tokens;
-    uint32_t cents = snap.today_cost_cents;
-    if (s_kaboo_period == 1) {
-        tokens = snap.week_tokens;
-        cents = snap.week_cost_cents;
-    } else if (s_kaboo_period == 2) {
-        tokens = snap.month_tokens;
-        cents = snap.month_cost_cents;
+    /* The numbers follow s_kaboo_shown, which a period switch changes halfway
+       through its slide; the header follows s_kaboo_period at once. */
+    uint64_t tokens = snap->today_tokens;
+    uint32_t cents = snap->today_cost_cents;
+    if (s_kaboo_shown == 1) {
+        tokens = snap->week_tokens;
+        cents = snap->week_cost_cents;
+    } else if (s_kaboo_shown == 2) {
+        tokens = snap->month_tokens;
+        cents = snap->month_cost_cents;
     }
     char text[32];
     format_tokens(text, sizeof(text), tokens);
     set_text_if_changed(s_kaboo_tokens, text);
     snprintf(text, sizeof(text), "$%" PRIu32 ".%02" PRIu32, cents / 100, cents % 100);
     set_text_if_changed(s_kaboo_cost, text);
-    set_text_if_changed(s_kaboo_model, snap.top_model[0] ? snap.top_model : "--");
+    set_text_if_changed(s_kaboo_model, snap->top_model[0] ? snap->top_model : "--");
 
     uint32_t now_unix = 0;
-    const bool have_now = usage_model_now_unix(&snap, true, esp_timer_get_time(),
+    const bool have_now = usage_model_now_unix(snap, true, esp_timer_get_time(),
                                                &now_unix);
     /* A stale source must not pass its old numbers off as current. */
-    const bool fresh = refresh_source_note(snap.kaboo_sampled_unix, now_unix, have_now);
+    const bool fresh = refresh_source_note(snap->kaboo_sampled_unix, now_unix, have_now);
     set_color_if_changed(s_kaboo_tokens, fresh ? s_accent_color : s_text_color);
 }
 
-static void refresh_claude(void)
+static void kaboo_slide_cb(void *var, int32_t progress)
 {
-    usage_snapshot_t snap;
-    const bool have = usage_link_get(&snap, NULL);
+    (void)var;
+    if (progress >= KABOO_SLIDE_HALF && s_kaboo_shown != s_kaboo_period) {
+        s_kaboo_shown = s_kaboo_period;
+        refresh(NULL);
+    }
+
+    /* Distance from rest: grows while the old numbers leave, shrinks while
+       the new ones arrive; squared so both halves ease toward the swap. */
+    const bool leaving = progress < KABOO_SLIDE_HALF;
+    const int32_t away = leaving ? progress : 2 * KABOO_SLIDE_HALF - progress;
+    const int32_t eased = away * away / KABOO_SLIDE_HALF;
+    const int32_t offset = KABOO_SLIDE_PX * eased / KABOO_SLIDE_HALF *
+                           (leaving ? -s_kaboo_slide_dir : s_kaboo_slide_dir);
+    const lv_opa_t opa = (lv_opa_t)(LV_OPA_COVER * (KABOO_SLIDE_HALF - eased) /
+                                    KABOO_SLIDE_HALF);
+    lv_obj_t *const values[] = { s_kaboo_tokens, s_kaboo_cost, s_kaboo_model };
+    for (size_t i = 0; i < sizeof(values) / sizeof(values[0]); ++i) {
+        if (values[i] == NULL) continue;
+        lv_obj_set_style_translate_x(values[i], offset, 0);
+        lv_obj_set_style_opa(values[i], opa, 0);
+    }
+}
+
+/* direction is +1 for the next period (numbers leave to the left) and -1 for
+   the previous one. */
+static void kaboo_switch_period(int32_t direction)
+{
+    if (s_kaboo_tokens != NULL && lv_anim_get(s_kaboo_tokens, kaboo_slide_cb) != NULL) {
+        /* Land the switch in progress before starting the next one. */
+        lv_anim_delete(s_kaboo_tokens, kaboo_slide_cb);
+        kaboo_slide_cb(NULL, 2 * KABOO_SLIDE_HALF);
+    }
+
+    s_kaboo_period = (s_kaboo_period + (direction > 0 ? 1 : KABOO_PERIOD_COUNT - 1)) %
+                     KABOO_PERIOD_COUNT;
+    s_kaboo_slide_dir = direction;
+    if (s_kaboo_tokens == NULL) {
+        s_kaboo_shown = s_kaboo_period;
+        return;
+    }
+
+    /* Keyed to a page object so deleting the page also stops the slide. */
+    lv_anim_t anim;
+    lv_anim_init(&anim);
+    lv_anim_set_var(&anim, s_kaboo_tokens);
+    lv_anim_set_exec_cb(&anim, kaboo_slide_cb);
+    lv_anim_set_values(&anim, 0, 2 * KABOO_SLIDE_HALF);
+    lv_anim_set_duration(&anim, wp7_ui_anim_ms(KABOO_SLIDE_MS));
+    lv_anim_start(&anim);
+}
+
+static void refresh_claude(const usage_snapshot_t *snap, bool have)
+{
     const lv_color_t warning = lv_color_hex(USAGE_WARNING_HEX);
-    if (!have || !(snap.flags & USAGE_FLAG_CLAUDE_VALID)) {
+    if (!have || !(snap->flags & USAGE_FLAG_CLAUDE_VALID)) {
         quota_row_blank(&s_quota[0], "");
         quota_row_blank(&s_quota[1], "");
-        set_text_if_changed(s_note, have ? "No quota data" : "Waiting for Mac");
+        set_text_if_changed(s_note, have ? "No quota data" : no_data_note());
         set_color_if_changed(s_note, warning);
         return;
     }
 
     uint32_t now_unix = 0;
-    const bool have_now = usage_model_now_unix(&snap, true, esp_timer_get_time(),
+    const bool have_now = usage_model_now_unix(snap, true, esp_timer_get_time(),
                                                &now_unix);
-    const bool fresh = refresh_source_note(snap.claude_sampled_unix, now_unix, have_now);
+    const bool fresh = refresh_source_note(snap->claude_sampled_unix, now_unix, have_now);
 
     /* Claude Code reports a window only while it is active; show a missing
        window as inactive rather than as 0%. */
-    if (snap.flags & USAGE_FLAG_FIVE_HOUR) {
-        quota_row_show(&s_quota[0], snap.five_hour_pct, snap.five_hour_resets_unix,
+    if (snap->flags & USAGE_FLAG_FIVE_HOUR) {
+        quota_row_show(&s_quota[0], snap->five_hour_pct, snap->five_hour_resets_unix,
                        now_unix, have_now, fresh);
     } else {
         quota_row_blank(&s_quota[0], "Not active");
     }
-    if (snap.flags & USAGE_FLAG_SEVEN_DAY) {
-        quota_row_show(&s_quota[1], snap.seven_day_pct, snap.seven_day_resets_unix,
+    if (snap->flags & USAGE_FLAG_SEVEN_DAY) {
+        quota_row_show(&s_quota[1], snap->seven_day_pct, snap->seven_day_resets_unix,
                        now_unix, have_now, fresh);
     } else {
         quota_row_blank(&s_quota[1], "Not active");
     }
+}
+
+/* Every Mac push carries its UTC time and offset, so the clock is right after
+   each boot without setting it by hand. A manual change lasts until the next
+   push. */
+static void sync_clock(const usage_snapshot_t *snap, uint32_t generation)
+{
+    uint32_t now_unix = 0;
+    if (generation == s_clock_generation ||
+            !usage_model_now_unix(snap, true, esp_timer_get_time(), &now_unix)) {
+        return;
+    }
+    s_clock_generation = generation;
+    s_clock_known = true;
+    s_clock_synced = true;
+    s_clock_base_s = now_unix;
+    s_clock_base_ms = now_ms();
+    s_clock_timezone = snap->tz_offset_minutes;
 }
 
 static lv_obj_t *panel_label(int32_t x, int32_t y, const lv_font_t *font,
@@ -346,23 +457,31 @@ static void refresh(lv_timer_t *timer)
     char value[48];
     char detail[128];
     char clock[16];
+    usage_snapshot_t snap;
+    uint32_t generation = 0;
+    const bool have = usage_link_get(&snap, &generation);
+    if (have) sync_clock(&snap, generation);
     format_clock(clock, sizeof(clock), now, false);
     set_text_if_changed(s_status_time, clock);
     if (!s_panel) return;
 
     switch (s_app) {
         case WP7_APP_KABOO:
-            refresh_kaboo();
+            refresh_kaboo(&snap, have);
             set_text_if_changed(s_hint, "UP/DOWN  Period\nHOLD OK  Back");
             return;
         case WP7_APP_CLAUDE:
-            refresh_claude();
+            refresh_claude(&snap, have);
             set_text_if_changed(s_hint, "HOLD OK  Back");
             return;
         case WP7_APP_CLOCK:
             format_clock(value, sizeof(value), now, true);
-            snprintf(detail, sizeof(detail), "%s\nTime resets when power is lost.",
-                     s_clock_known ? "Manual time" : "Set time with buttons");
+            if (s_clock_synced) {
+                snprintf(detail, sizeof(detail), "Synced from Mac\nUpdates with each push.");
+            } else {
+                snprintf(detail, sizeof(detail), "%s\nTime resets when power is lost.",
+                         s_clock_known ? "Manual time" : "Set with buttons or the Mac");
+            }
             set_text_if_changed(s_hint, "UP +1h   DOWN +1m\nHOLD UP/DOWN +6h/+10m\nHOLD OK Back");
             break;
         case WP7_APP_BATTERY:
@@ -418,6 +537,11 @@ void wp7_apps_set_battery(int soc, int mv)
     refresh(NULL);
 }
 
+void wp7_apps_set_ble_available(bool available)
+{
+    s_ble_available = available;
+}
+
 bool wp7_apps_open(lv_obj_t *screen, wp7_app_id_t app, int32_t status_h,
                    lv_color_t bg, lv_color_t text, lv_color_t accent)
 {
@@ -448,6 +572,7 @@ bool wp7_apps_open(lv_obj_t *screen, wp7_app_id_t app, int32_t status_h,
 
     s_text_color = text;
     s_accent_color = accent;
+    s_kaboo_shown = s_kaboo_period;
     if (app == WP7_APP_KABOO) {
         static const char *const periods[KABOO_PERIOD_COUNT] = {
             "today", "7 days", "30 days",
@@ -519,8 +644,7 @@ void wp7_apps_key(wp7_key_t key, bool long_press)
 {
     const uint64_t now = now_ms();
     if (s_app == WP7_APP_KABOO && !long_press && key != WP7_KEY_OK) {
-        s_kaboo_period = (s_kaboo_period + (key == WP7_KEY_DOWN ? 1 : KABOO_PERIOD_COUNT - 1)) %
-                         KABOO_PERIOD_COUNT;
+        kaboo_switch_period(key == WP7_KEY_DOWN ? 1 : -1);
     } else if (s_app == WP7_APP_CLOCK) {
         if (key == WP7_KEY_UP || key == WP7_KEY_DOWN) {
             const uint64_t local = s_clock_known ? clock_local_seconds(now) : 0;
@@ -529,6 +653,7 @@ void wp7_apps_key(wp7_key_t key, bool long_press)
                                   (long_press ? 10 * 60 : 60);
             const uint64_t adjusted = (local + step) % 86400;
             s_clock_known = true;
+            s_clock_synced = false;
             s_clock_base_s = adjusted;
             s_clock_base_ms = now;
             s_clock_timezone = 0;
