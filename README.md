@@ -10,7 +10,7 @@ A standalone ESP-IDF application for the **FoloToy AI Passport**. It ports [Zyou
 
 ## Features and current state
 
-- Two-column color tiles, application list, original settings entrance and exit transitions. Brightness, dark mode, theme color, animation speed, and fast animations are saved in NVS.
+- Two-column color tiles, application list, and the original UI Settings entrance and exit transitions, which every app page uses too. Brightness, dark mode, theme color, animation speed, and fast animations are saved in NVS.
 - **Clock:** set from the Mac with each Bluetooth push (see below), or by hand with the buttons. The time is lost on power-off; the status bar shows `--:--` until the next push or manual setting.
 - **Battery:** reads state of charge and cell voltage from the onboard CW2017 gauge; reports unavailable when it cannot read the sensor.
 - **Stopwatch:** start, pause, lap, and reset. Timing continues while the page is closed.
@@ -35,14 +35,16 @@ These two 240 × 320 PNGs were reconstructed from actual display updates over th
 | --- | --- | --- | --- | --- |
 | Tiles | Select a tile | Hold Down for the app list | Open the selected tile, or the list if none is selected | Open the list |
 | App list | Select an item | — | Open the item | Return to tiles |
-| UI Settings | Select a control | — | Change the control | Return with the upstream exit transition |
+| UI Settings | Select a control | — | Change the control | Return |
 | Clock | Add 1 hour / 1 minute | Add 6 hours / 10 minutes | — | Return |
 | Kaboo | Change period | — | — | Return |
 | Claude | — | — | — | Return |
 | Stopwatch | Lap / reset while paused | — | Start / pause | Return |
 | Focus | Change preset / reset while paused | — | Start / pause | Return |
 
-A thin outline marks the selected control because the Passport has no touchscreen. A hold is 0.8 s. A click registers when the key is released, so quick repeated presses all count; while OK is held, the selected tile or list row sinks in.
+Every page, UI Settings or an app, opens from its tile or list row with the upstream UI Settings entrance: the other tiles or rows clear, the selected one zooms away, then the title and rows slide in. Holding OK plays it in reverse. Keys are ignored for the second or so that a transition runs.
+
+A thin outline marks the selected control because the Passport has no touchscreen; it is hidden while a page opens and returns when the page closes. A hold is 0.8 s. A click registers when the key is released, so quick repeated presses all count; while OK is held, the selected tile or list row sinks in.
 
 ## Build and flash
 

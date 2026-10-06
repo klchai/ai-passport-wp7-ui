@@ -77,6 +77,11 @@ static uint32_t s_kaboo_shown;   /* period whose numbers are on screen */
 static int32_t s_kaboo_slide_dir;
 static lv_color_t s_text_color;
 static lv_color_t s_accent_color;
+/* Title and rows of the open page, in entrance order (see wp7_apps_items). */
+static wp7_app_item_t s_items[WP7_APP_MAX_ITEMS];
+static int32_t s_item_count;
+/* The open transition has finished; until then data animations wait. */
+static bool s_entered;
 
 static void refresh(lv_timer_t *timer);
 
@@ -153,6 +158,8 @@ static void bar_width_anim_cb(void *bar, int32_t width)
 
 static void quota_bar_set(quota_row_t *row, int32_t width)
 {
+    /* Bars stay empty while the page slides in and fill once it has landed. */
+    if (!s_entered) width = 0;
     if (row->bar_target == width) return;
     row->bar_target = width;
 
@@ -414,10 +421,31 @@ static void sync_clock(const usage_snapshot_t *snap, uint32_t generation)
     s_clock_timezone = snap->tz_offset_minutes;
 }
 
-static lv_obj_t *panel_label(int32_t x, int32_t y, const lv_font_t *font,
-                             lv_color_t color)
+static void add_item(lv_obj_t *obj, int32_t x, int32_t y, int32_t w, int32_t h)
 {
-    lv_obj_t *label = lv_label_create(s_panel);
+    if (s_item_count >= WP7_APP_MAX_ITEMS) return;
+    s_items[s_item_count++] = (wp7_app_item_t) { .obj = obj, .x = x, .y = y, .w = w, .h = h };
+}
+
+/* A transparent, full-width row of the page. The launcher slides whole rows in
+   and out, so everything on one line of the page lives in the same row. */
+static lv_obj_t *add_row(int32_t y, int32_t h)
+{
+    /* The new panel has no layout yet, so take the width it was given. */
+    const int32_t width = lv_obj_get_style_width(s_panel, LV_PART_MAIN);
+    lv_obj_t *row = lv_obj_create(s_panel);
+    lv_obj_remove_style_all(row);
+    lv_obj_set_pos(row, 0, y);
+    lv_obj_set_size(row, width, h);
+    lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+    add_item(row, 0, y, width, h);
+    return row;
+}
+
+static lv_obj_t *row_label(lv_obj_t *row, int32_t x, int32_t y, const lv_font_t *font,
+                           lv_color_t color)
+{
+    lv_obj_t *label = lv_label_create(row);
     lv_label_set_text(label, "");
     lv_obj_set_style_text_font(label, font, 0);
     lv_obj_set_style_text_color(label, color, 0);
@@ -428,14 +456,15 @@ static lv_obj_t *panel_label(int32_t x, int32_t y, const lv_font_t *font,
 static void create_quota_row(quota_row_t *row, int32_t y, const char *name,
                              lv_color_t text, lv_color_t accent)
 {
-    lv_label_set_text(panel_label(12, y + 4, &lv_font_montserrat_16, text), name);
-    row->pct = panel_label(12, y, &lv_font_montserrat_22, accent);
+    lv_obj_t *block = add_row(y, 64);
+    lv_label_set_text(row_label(block, 12, 4, &lv_font_montserrat_16, text), name);
+    row->pct = row_label(block, 12, 0, &lv_font_montserrat_22, accent);
     lv_obj_set_width(row->pct, QUOTA_BAR_W);
     lv_obj_set_style_text_align(row->pct, LV_TEXT_ALIGN_RIGHT, 0);
 
-    lv_obj_t *track = lv_obj_create(s_panel);
+    lv_obj_t *track = lv_obj_create(block);
     lv_obj_remove_style_all(track);
-    lv_obj_set_pos(track, 12, y + 32);
+    lv_obj_set_pos(track, 12, 32);
     lv_obj_set_size(track, QUOTA_BAR_W, 8);
     lv_obj_set_style_bg_color(track, text, 0);
     lv_obj_set_style_bg_opa(track, LV_OPA_20, 0);
@@ -447,7 +476,7 @@ static void create_quota_row(quota_row_t *row, int32_t y, const char *name,
     lv_obj_set_style_bg_color(row->bar, accent, 0);
     lv_obj_set_style_bg_opa(row->bar, LV_OPA_COVER, 0);
 
-    row->reset = panel_label(12, y + 46, &lv_font_montserrat_14, text);
+    row->reset = row_label(block, 12, 46, &lv_font_montserrat_14, text);
 }
 
 static void refresh(lv_timer_t *timer)
@@ -547,8 +576,11 @@ bool wp7_apps_open(lv_obj_t *screen, wp7_app_id_t app, int32_t status_h,
 {
     if (s_panel || app >= WP7_APP_COUNT) return false;
     s_app = app;
+    s_item_count = 0;
+    s_entered = false;
     const int32_t width = lv_obj_get_width(screen);
     const int32_t height = lv_obj_get_height(screen) - status_h;
+    const int32_t content_w = width - 24;
     s_panel = lv_obj_create(screen);
     lv_obj_remove_style_all(s_panel);
     lv_obj_set_pos(s_panel, 0, status_h);
@@ -556,16 +588,26 @@ bool wp7_apps_open(lv_obj_t *screen, wp7_app_id_t app, int32_t status_h,
     lv_obj_set_style_bg_color(s_panel, bg, 0);
     lv_obj_set_style_bg_opa(s_panel, LV_OPA_COVER, 0);
     lv_obj_remove_flag(s_panel, LV_OBJ_FLAG_SCROLLABLE);
+    /* Hidden until the launcher's open transition reaches the page. */
+    lv_obj_add_flag(s_panel, LV_OBJ_FLAG_HIDDEN);
 
+    /* The title is sized and pivoted like the UI Settings title, which the
+       transition scales as it flies in. */
+    const int32_t title_h = lv_font_montserrat_22.line_height + 4;
     s_title = lv_label_create(s_panel);
     lv_obj_set_style_text_font(s_title, &lv_font_montserrat_22, 0);
     lv_obj_set_style_text_color(s_title, text, 0);
     lv_label_set_text(s_title, s_titles[app]);
     lv_obj_set_pos(s_title, 12, 13);
+    lv_obj_set_size(s_title, content_w, title_h);
+    lv_obj_set_style_transform_pivot_x(s_title, 0, 0);
+    lv_obj_set_style_transform_pivot_y(s_title, title_h / 2, 0);
+    add_item(s_title, 12, 13, content_w, title_h);
 
-    lv_obj_t *stripe = lv_obj_create(s_panel);
+    lv_obj_t *stripe_row = add_row(49, 5);
+    lv_obj_t *stripe = lv_obj_create(stripe_row);
     lv_obj_remove_style_all(stripe);
-    lv_obj_set_pos(stripe, 12, 49);
+    lv_obj_set_pos(stripe, 12, 0);
     lv_obj_set_size(stripe, 54, 5);
     lv_obj_set_style_bg_color(stripe, accent, 0);
     lv_obj_set_style_bg_opa(stripe, LV_OPA_COVER, 0);
@@ -577,50 +619,44 @@ bool wp7_apps_open(lv_obj_t *screen, wp7_app_id_t app, int32_t status_h,
         static const char *const periods[KABOO_PERIOD_COUNT] = {
             "today", "7 days", "30 days",
         };
+        lv_obj_t *row = add_row(70, 20);
         int32_t x = 12;
         for (uint32_t i = 0; i < KABOO_PERIOD_COUNT; ++i) {
-            s_kaboo_periods[i] = panel_label(x, 70, &lv_font_montserrat_16, text);
+            s_kaboo_periods[i] = row_label(row, x, 0, &lv_font_montserrat_16, text);
             lv_label_set_text(s_kaboo_periods[i], periods[i]);
             lv_obj_update_layout(s_kaboo_periods[i]);
             x += lv_obj_get_width(s_kaboo_periods[i]) + 16;
         }
-        lv_label_set_text(panel_label(12, 108, &lv_font_montserrat_16, text), "Tokens");
-        s_kaboo_tokens = panel_label(12, 104, &lv_font_montserrat_22, accent);
-        lv_label_set_text(panel_label(12, 142, &lv_font_montserrat_16, text), "Cost");
-        s_kaboo_cost = panel_label(12, 138, &lv_font_montserrat_22, text);
-        lv_obj_set_width(s_kaboo_tokens, width - 24);
-        lv_obj_set_width(s_kaboo_cost, width - 24);
+        row = add_row(104, 28);
+        lv_label_set_text(row_label(row, 12, 4, &lv_font_montserrat_16, text), "Tokens");
+        s_kaboo_tokens = row_label(row, 12, 0, &lv_font_montserrat_22, accent);
+        lv_obj_set_width(s_kaboo_tokens, content_w);
         lv_obj_set_style_text_align(s_kaboo_tokens, LV_TEXT_ALIGN_RIGHT, 0);
+        row = add_row(138, 28);
+        lv_label_set_text(row_label(row, 12, 4, &lv_font_montserrat_16, text), "Cost");
+        s_kaboo_cost = row_label(row, 12, 0, &lv_font_montserrat_22, text);
+        lv_obj_set_width(s_kaboo_cost, content_w);
         lv_obj_set_style_text_align(s_kaboo_cost, LV_TEXT_ALIGN_RIGHT, 0);
-        lv_label_set_text(panel_label(12, 174, &lv_font_montserrat_14, text), "Top model");
-        s_kaboo_model = panel_label(12, 192, &lv_font_montserrat_16, text);
-        lv_obj_set_width(s_kaboo_model, width - 24);
+        row = add_row(174, 38);
+        lv_label_set_text(row_label(row, 12, 0, &lv_font_montserrat_14, text), "Top model");
+        s_kaboo_model = row_label(row, 12, 18, &lv_font_montserrat_16, text);
+        lv_obj_set_width(s_kaboo_model, content_w);
         lv_obj_set_height(s_kaboo_model, lv_font_montserrat_16.line_height);
         lv_label_set_long_mode(s_kaboo_model, LV_LABEL_LONG_DOT);
-        s_note = panel_label(12, 218, &lv_font_montserrat_14, text);
+        s_note = row_label(add_row(218, 18), 12, 0, &lv_font_montserrat_14, text);
     } else if (app == WP7_APP_CLAUDE) {
         create_quota_row(&s_quota[0], 70, "5-hour", text, accent);
         create_quota_row(&s_quota[1], 144, "7-day", text, accent);
-        s_note = panel_label(12, 218, &lv_font_montserrat_14, text);
+        s_note = row_label(add_row(218, 18), 12, 0, &lv_font_montserrat_14, text);
     } else {
-        s_value = lv_label_create(s_panel);
-        lv_obj_set_style_text_font(s_value, &lv_font_montserrat_22, 0);
-        lv_obj_set_style_text_color(s_value, accent, 0);
-        lv_obj_set_pos(s_value, 12, 78);
-        lv_obj_set_width(s_value, width - 24);
-
-        s_detail = lv_label_create(s_panel);
-        lv_obj_set_style_text_font(s_detail, &lv_font_montserrat_16, 0);
-        lv_obj_set_style_text_color(s_detail, text, 0);
-        lv_obj_set_pos(s_detail, 12, 124);
-        lv_obj_set_width(s_detail, width - 24);
+        s_value = row_label(add_row(78, 28), 12, 0, &lv_font_montserrat_22, accent);
+        lv_obj_set_width(s_value, content_w);
+        s_detail = row_label(add_row(124, 64), 12, 0, &lv_font_montserrat_16, text);
+        lv_obj_set_width(s_detail, content_w);
     }
 
-    s_hint = lv_label_create(s_panel);
-    lv_obj_set_style_text_font(s_hint, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(s_hint, text, 0);
-    lv_obj_set_pos(s_hint, 12, height - 46);
-    lv_obj_set_width(s_hint, width - 24);
+    s_hint = row_label(add_row(height - 46, 46), 12, 0, &lv_font_montserrat_14, text);
+    lv_obj_set_width(s_hint, content_w);
     refresh(NULL);
     return true;
 }
@@ -633,11 +669,35 @@ void wp7_apps_close(void)
     s_note = s_kaboo_tokens = s_kaboo_cost = s_kaboo_model = NULL;
     memset(s_kaboo_periods, 0, sizeof(s_kaboo_periods));
     memset(s_quota, 0, sizeof(s_quota));
+    memset(s_items, 0, sizeof(s_items));
+    s_item_count = 0;
+    s_entered = false;
 }
 
 bool wp7_apps_active(void)
 {
     return s_panel != NULL;
+}
+
+int32_t wp7_apps_items(wp7_app_item_t *items, int32_t capacity)
+{
+    const int32_t count = s_item_count < capacity ? s_item_count : capacity;
+    memcpy(items, s_items, (size_t)count * sizeof(items[0]));
+    return count;
+}
+
+void wp7_apps_set_visible(bool visible)
+{
+    if (s_panel == NULL || lv_obj_has_flag(s_panel, LV_OBJ_FLAG_HIDDEN) == !visible) return;
+    if (visible) lv_obj_remove_flag(s_panel, LV_OBJ_FLAG_HIDDEN);
+    else lv_obj_add_flag(s_panel, LV_OBJ_FLAG_HIDDEN);
+}
+
+void wp7_apps_entered(void)
+{
+    if (s_panel == NULL || s_entered) return;
+    s_entered = true;
+    refresh(NULL);
 }
 
 void wp7_apps_key(wp7_key_t key, bool long_press)

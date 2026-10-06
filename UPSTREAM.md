@@ -26,7 +26,13 @@
   Bluetooth LE. They take the first two home tiles; Focus moved to the app
   list only.
 - The original demo is not a phone OS; the Passport build adds functional
-  pages for the five non-settings app rows.
+  pages for the six non-settings app rows.
+- App pages open and close with the upstream UI Settings transitions from
+  their tile or list row instead of appearing at once. Each page is a title
+  and full-width rows that the transitions move like the settings controls;
+  quota bars fill once the page is in. At the default speed a page opens in
+  0.9 to 1.1 s and closes in 1.1 to 1.2 s. The key focus outline is hidden
+  while any page opens.
 - Transitions overlap neighboring items: each starts a quarter unit after the
   previous one (an eighth with fast animations) instead of after it finishes,
   and the clicked-tile and title phases are shorter. At the default speed UI
