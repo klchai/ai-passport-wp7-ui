@@ -651,7 +651,10 @@ bool wp7_apps_open(lv_obj_t *screen, wp7_app_id_t app, int32_t status_h,
     } else {
         s_value = row_label(add_row(78, 28), 12, 0, &lv_font_montserrat_22, accent);
         lv_obj_set_width(s_value, content_w);
-        s_detail = row_label(add_row(124, 64), 12, 0, &lv_font_montserrat_16, text);
+        /* The detail runs to four lines when the Clock text wraps, so its row
+           takes all the space down to the hint. */
+        s_detail = row_label(add_row(124, height - 46 - 124), 12, 0,
+                             &lv_font_montserrat_16, text);
         lv_obj_set_width(s_detail, content_w);
     }
 
