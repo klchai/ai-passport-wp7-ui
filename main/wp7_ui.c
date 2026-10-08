@@ -3975,6 +3975,20 @@ static lv_obj_t *create_settings_label(lv_obj_t *screen, const char *text,
     return label;
 }
 
+/* LVGL draws a slider knob as wide as the slider is tall and centres it on
+   the indicator's last pixel, so at either end of the range half the knob
+   hung outside the control and over the focus outline. Start the knob just
+   after that pixel and end the indicator a whole knob short of the right
+   edge: at the minimum the knob fills the left end, at the maximum the right.
+   Call it once the slider has its height. */
+static void keep_knob_inside(lv_obj_t *slider, int32_t height)
+{
+    lv_obj_set_style_pad_left(slider, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_right(slider, height, LV_PART_MAIN);
+    lv_obj_set_style_pad_left(slider, -(height / 2) - 1, LV_PART_KNOB);
+    lv_obj_set_style_pad_right(slider, height / 2 + 1, LV_PART_KNOB);
+}
+
 static void style_settings_slider(lv_obj_t *slider, int32_t screen_w, int32_t screen_h)
 {
     lv_obj_remove_style_all(slider);
@@ -3997,14 +4011,11 @@ static void style_settings_slider(lv_obj_t *slider, int32_t screen_w, int32_t sc
 
 static void style_wp7_switch_slider(lv_obj_t *sw, int32_t w, int32_t h)
 {
-    const int32_t knob_pad = h / 2;
-
     lv_obj_remove_style_all(sw);
     lv_slider_set_range(sw, 0, WP7_SWITCH_VALUE_MAX);
     set_control_anim_duration(sw);
     lv_obj_set_size(sw, w, h);
-    lv_obj_set_style_pad_left(sw, 0, LV_PART_MAIN);
-    lv_obj_set_style_pad_right(sw, knob_pad, LV_PART_MAIN);
+    keep_knob_inside(sw, h);
     lv_obj_set_style_bg_opa(sw, LV_OPA_COVER, LV_PART_MAIN);
     lv_obj_set_style_bg_opa(sw, LV_OPA_COVER, LV_PART_MAIN | LV_STATE_CHECKED);
     lv_obj_set_style_bg_opa(sw, LV_OPA_COVER,
@@ -4051,15 +4062,17 @@ static void create_settings_page(lv_obj_t *screen, int32_t screen_w, int32_t scr
     const int32_t mode_switch_w = mode_switch_h * 2;
     const int32_t brightness_label_y = title_y + title_h + 4;
     const int32_t brightness_slider_y = brightness_label_y + label_h + 2;
-    const int32_t mode_y = brightness_slider_y + slider_h + 5;
+    /* The gaps fit the last switch and its 3 px focus outline above the
+       bottom edge of a 320 px screen. */
+    const int32_t mode_y = brightness_slider_y + slider_h + 3;
     const int32_t mode_switch_y = mode_y + mode_h + 2;
-    const int32_t theme_label_y = mode_switch_y + mode_switch_h + 4;
+    const int32_t theme_label_y = mode_switch_y + mode_switch_h + 3;
     const int32_t theme_picker_y = theme_label_y + label_h + 3;
-    const int32_t speed_label_y = theme_picker_y + picker_h + 4;
+    const int32_t speed_label_y = theme_picker_y + picker_h + 3;
     const int32_t speed_slider_y = speed_label_y + label_h + 2;
     const int32_t button_x = screen_w - pad - button_w;
-    const int32_t button_y = speed_slider_y + slider_h + 4;
-    const int32_t fast_label_y = button_y + button_h + 4;
+    const int32_t button_y = speed_slider_y + slider_h + 3;
+    const int32_t fast_label_y = button_y + button_h + 3;
     const int32_t fast_switch_y = fast_label_y + mode_h + 2;
     const int32_t mode_label_w = content_w;
     const int32_t mode_switch_x = pad + content_w - mode_switch_w -
@@ -4101,6 +4114,7 @@ static void create_settings_page(lv_obj_t *screen, int32_t screen_w, int32_t scr
     lv_slider_set_range(brightness_slider, WP7_BRIGHTNESS_MIN, WP7_BRIGHTNESS_MAX);
     lv_slider_set_value(brightness_slider, sanitize_brightness(s_wp7.brightness_percent), LV_ANIM_OFF);
     lv_obj_set_size(brightness_slider, content_w, slider_h);
+    keep_knob_inside(brightness_slider, slider_h);
     lv_obj_set_pos(brightness_slider, pad, brightness_slider_y);
     lv_obj_add_event_cb(brightness_slider, settings_brightness_cb, LV_EVENT_PRESSED, NULL);
     lv_obj_add_event_cb(brightness_slider, settings_brightness_cb, LV_EVENT_PRESSING, NULL);
@@ -4193,6 +4207,7 @@ static void create_settings_page(lv_obj_t *screen, int32_t screen_w, int32_t scr
     lv_slider_set_range(slider, WP7_ANIM_SPEED_MIN, WP7_ANIM_SPEED_MAX);
     lv_slider_set_value(slider, sanitize_animation_speed(s_wp7.anim_speed_percent), LV_ANIM_OFF);
     lv_obj_set_size(slider, content_w, slider_h);
+    keep_knob_inside(slider, slider_h);
     lv_obj_set_pos(slider, pad, speed_slider_y);
     lv_obj_add_event_cb(slider, settings_slider_cb, LV_EVENT_PRESSED, NULL);
     lv_obj_add_event_cb(slider, settings_slider_cb, LV_EVENT_PRESSING, NULL);

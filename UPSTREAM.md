@@ -20,6 +20,11 @@
   exit animation completes from both tiles and the app list with this pool.
 - Sized Passport settings labels to their 16/22 px font line heights and made
   the palette smaller so sliders and swatches no longer cover text.
+- Slider and switch knobs stay inside their controls at both ends of the
+  range. They were centred on the indicator's end, so at the minimum and
+  maximum half a knob hung outside the control and its focus outline. The
+  settings rows are slightly tighter so the last switch and its outline fit
+  above the bottom of the 320 px screen.
 - Replaced numbered tiles and demo list entries with named applications; added
   Passport pages and the onboard CW2017 battery gauge. The former AI Usage
   entry is now two pages, Kaboo token usage and Claude quota, fed over
