@@ -40,6 +40,8 @@
 - `components/passport_bsp/` is a reduced, adapted copy of
   [`components/bsp/` from FoloToy/ai-passport](https://github.com/FoloToy/ai-passport).
   The checked base revision was `1051209d807fb26f943236b7e02281f13d39bc90`.
+  The ES8311 audio driver (`bsp_audio.*`, `bsp_es8311_sleep_check.*`) was
+  copied unchanged from revision `a59ee9e408b25828131cdf8a01905f5778e6083f`.
   Its MIT License is preserved in [`LICENSES/FoloToy-MIT.txt`](LICENSES/FoloToy-MIT.txt).
 - The upstream file adapted into `main/wp7_ui.c` carries
   `SPDX-License-Identifier: Apache-2.0`; the license text is in

@@ -33,7 +33,9 @@
 
 - `components/passport_bsp/` 从 [FoloToy/ai-passport](https://github.com/FoloToy/ai-passport)
   的 `components/bsp/` 精简、适配而来；核对时的基础提交为
-  `1051209d807fb26f943236b7e02281f13d39bc90`。原项目的 MIT 许可全文保留在
+  `1051209d807fb26f943236b7e02281f13d39bc90`。ES8311 音频驱动（`bsp_audio.*`、
+  `bsp_es8311_sleep_check.*`）未经修改，取自提交
+  `a59ee9e408b25828131cdf8a01905f5778e6083f`。原项目的 MIT 许可全文保留在
   [`LICENSES/FoloToy-MIT.txt`](LICENSES/FoloToy-MIT.txt)。
 - `main/wp7_ui.c` 的上游原文件保留了 `SPDX-License-Identifier: Apache-2.0`；
   对应许可全文在 [`LICENSES/Apache-2.0.txt`](LICENSES/Apache-2.0.txt)。
