@@ -5,6 +5,7 @@
 #include <string.h>
 #include "esp_timer.h"
 #include "usage_link.h"
+#include "wp7_sound.h"
 
 static const char *const s_titles[WP7_APP_COUNT] = {
     "Kaboo", "Claude", "Clock", "Battery", "Stopwatch", "Focus timer",
@@ -60,6 +61,9 @@ static lv_obj_t *s_kaboo_model;
 static uint32_t s_kaboo_period;
 static lv_color_t s_text_color;
 static lv_color_t s_accent_color;
+/* Focus length: a preset, or any whole minutes set by holding Up or Down. */
+#define FOCUS_MAX_MIN      99
+static uint64_t s_focus_set_ms = 25 * 60000ULL;
 static uint64_t s_focus_left_ms = 25 * 60000ULL;
 static uint64_t s_focus_start_ms;
 static bool s_focus_running;
@@ -109,6 +113,17 @@ static uint64_t focus_remaining(uint64_t now)
 {
     const uint64_t elapsed = s_focus_running && now >= s_focus_start_ms ? now - s_focus_start_ms : 0;
     return elapsed >= s_focus_left_ms ? 0 : s_focus_left_ms - elapsed;
+}
+
+/* Focus ends even while its page is closed, and the chime calls the user
+   back. */
+static void finish_focus(uint64_t now)
+{
+    if (s_focus_running && !focus_remaining(now)) {
+        s_focus_running = false;
+        s_focus_left_ms = 0;
+        wp7_sound_ring();
+    }
 }
 
 static void format_mmss(char *out, size_t size, uint64_t ms, bool centiseconds)
@@ -348,6 +363,7 @@ static void refresh(lv_timer_t *timer)
     char clock[16];
     format_clock(clock, sizeof(clock), now, false);
     set_text_if_changed(s_status_time, clock);
+    finish_focus(now);
     if (!s_panel) return;
 
     switch (s_app) {
@@ -387,15 +403,13 @@ static void refresh(lv_timer_t *timer)
             set_text_if_changed(s_hint, "OK Start/Pause  UP Lap\nDOWN Reset  HOLD OK Back");
             break;
         case WP7_APP_FOCUS:
-            if (s_focus_running && !focus_remaining(now)) {
-                s_focus_running = false;
-                s_focus_left_ms = 0;
-            }
             format_mmss(value, sizeof(value), focus_remaining(now), false);
-            snprintf(detail, sizeof(detail), "%s\nPreset: %u minutes",
+            snprintf(detail, sizeof(detail), "%s\nLength: %u min",
                      s_focus_running ? "FOCUSING" : s_focus_left_ms ? "READY / PAUSED" : "TIME IS UP",
-                     (unsigned)s_focus_minutes[s_focus_preset]);
-            set_text_if_changed(s_hint, "OK Start/Pause  UP Preset\nDOWN Reset  HOLD OK Back");
+                     (unsigned)(s_focus_set_ms / 60000));
+            set_text_if_changed(s_hint, wp7_sound_ringing() ? "Any key  Stop alarm" :
+                                "OK Start/Pause  UP Preset\nHOLD UP/DOWN +1m/-1m\n"
+                                "DOWN Reset  HOLD OK Back");
             break;
         default:
             return;
@@ -545,19 +559,27 @@ void wp7_apps_key(wp7_key_t key, bool long_press)
             s_stopwatch_base_ms = s_stopwatch_lap_ms = 0;
             s_stopwatch_laps = 0;
         }
-    } else if (s_app == WP7_APP_FOCUS && !long_press) {
-        if (key == WP7_KEY_OK) {
+    } else if (s_app == WP7_APP_FOCUS) {
+        if (key == WP7_KEY_OK && !long_press) {
             if (s_focus_running) s_focus_left_ms = focus_remaining(now);
             else {
-                if (!s_focus_left_ms) s_focus_left_ms = s_focus_minutes[s_focus_preset] * 60000ULL;
+                if (!s_focus_left_ms) s_focus_left_ms = s_focus_set_ms;
                 s_focus_start_ms = now;
             }
             s_focus_running = !s_focus_running;
-        } else if (key == WP7_KEY_UP && !s_focus_running) {
-            s_focus_preset = (s_focus_preset + 1) % (sizeof(s_focus_minutes) / sizeof(s_focus_minutes[0]));
-            s_focus_left_ms = s_focus_minutes[s_focus_preset] * 60000ULL;
-        } else if (key == WP7_KEY_DOWN && !s_focus_running) {
-            s_focus_left_ms = s_focus_minutes[s_focus_preset] * 60000ULL;
+        } else if (key != WP7_KEY_OK && !s_focus_running) {
+            /* Up picks the next preset and Down restarts; holding either
+               sets the length one minute at a time. */
+            if (!long_press && key == WP7_KEY_UP) {
+                s_focus_preset = (s_focus_preset + 1) % (sizeof(s_focus_minutes) / sizeof(s_focus_minutes[0]));
+                s_focus_set_ms = s_focus_minutes[s_focus_preset] * 60000ULL;
+            } else if (long_press) {
+                int64_t minutes = (int64_t)(s_focus_set_ms / 60000) + (key == WP7_KEY_UP ? 1 : -1);
+                if (minutes < 1) minutes = 1;
+                if (minutes > FOCUS_MAX_MIN) minutes = FOCUS_MAX_MIN;
+                s_focus_set_ms = (uint64_t)minutes * 60000ULL;
+            }
+            s_focus_left_ms = s_focus_set_ms;
         }
     }
     refresh(NULL);

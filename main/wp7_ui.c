@@ -18,6 +18,7 @@
 #include "bsp_display.h"
 #include "bsp_pins.h"
 #include "wp7_apps.h"
+#include "wp7_sound.h"
 #include "wp7_ui.h"
 
 #define WP7_COLUMNS                  2
@@ -4107,6 +4108,8 @@ static void key_change_setting(void)
 
 void wp7_ui_key(wp7_key_t key, bool long_press)
 {
+    /* A ringing timer takes the next key only to stop the alarm. */
+    if (wp7_sound_silence()) return;
     if (s_wp7.animating || s_wp7.drag_active) return;
     if (wp7_apps_active()) {
         if (key == WP7_KEY_OK && long_press) {

@@ -14,7 +14,8 @@ A standalone ESP-IDF application for the **FoloToy AI Passport**. It ports [Zyou
 - **Clock:** set the time with buttons. Time must be set again after power loss; the status bar displays `--:--` until then.
 - **Battery:** reads state of charge and cell voltage from the onboard CW2017 gauge; reports unavailable when it cannot read the sensor.
 - **Stopwatch:** start, pause, lap, and reset. Timing continues while the page is closed.
-- **Focus:** 5/15/25/45-minute presets. Timing continues while the page is closed. It has no home tile; open it from the app list.
+- **Focus:** 5/15/25/45-minute presets, or any length from 1 to 99 minutes. Timing continues while the page is closed, and the speaker chimes when it ends. It has no home tile; open it from the app list.
+- **Alarm chime:** the onboard ES8311 codec plays a short three-note chime every 1.5 s for up to a minute. The next key press only stops it.
 - **Kaboo:** token count and cost for today, 7 days or 30 days, plus the top model, received over Bluetooth LE from `tools/usage_bridge.py` on a Mac.
 - **Claude:** 5-hour and 7-day quota use with reset countdowns, received over Bluetooth LE from `tools/usage_bridge.py` on a Mac. A window's percentage and bar use the theme color, turn yellow at 70% and red at 90%. It shows "Waiting for Mac" until the first update and marks data older than 15 minutes as stale; it never invents usage data.
 - The status bar's Wi-Fi and battery symbols are part of the UI style and do not indicate live connection or charge state. See the Battery page for the actual reading.
@@ -40,7 +41,8 @@ These two 240 × 320 PNGs were reconstructed from actual display updates over th
 | Kaboo | Change period | — | — | Return |
 | Claude | — | — | — | Return |
 | Stopwatch | Lap / reset while paused | — | Start / pause | Return |
-| Focus | Change preset / reset while paused | — | Start / pause | Return |
+| Focus | Next preset / restart while paused | Add / subtract 1 minute while paused | Start / pause | Return |
+| Any page, while a timer chimes | Stop the chime | Stop the chime | Stop the chime | Stop the chime |
 
 A thin outline marks the selected control because the Passport has no touchscreen.
 
@@ -93,8 +95,8 @@ When the script prints `Serial ready`, check the display and press Enter. It rec
 | Project | Used for | Source / license information |
 | --- | --- | --- |
 | [ZyoungInc/JC4880P443C_BSP `wp7`](https://github.com/ZyoungInc/JC4880P443C_BSP/tree/wp7) | WP7 pages, theme, animations, and settings structure in `main/wp7_ui.c` | Based on commit `9d1743a`; original file marks `SPDX-License-Identifier: Apache-2.0`; see the [porting notes](UPSTREAM.md) |
-| [FoloToy/ai-passport](https://github.com/FoloToy/ai-passport) | Passport display, button, I²C, and battery code in `components/passport_bsp` | Upstream repository uses the MIT License; this is a reduced and adapted copy |
+| [FoloToy/ai-passport](https://github.com/FoloToy/ai-passport) | Passport display, button, I²C, battery, and ES8311 audio code in `components/passport_bsp` | Upstream repository uses the MIT License; this is a reduced and adapted copy |
 | [klchai/ai-passport-liquid-glass-ui](https://github.com/klchai/ai-passport-liquid-glass-ui) | Kaboo and Claude usage protocol and Bluetooth LE link in `main/usage_model.*`, `main/usage_link.*`, `tools/usage_bridge.py` and `tests/test_usage_model.c` | MIT License (FoloToy), text in `LICENSES/FoloToy-MIT.txt`; see the [porting notes](UPSTREAM.md) |
-| [LVGL](https://github.com/lvgl/lvgl), [ESP-IDF](https://github.com/espressif/esp-idf), [esp_lvgl_port](https://components.espressif.com/components/espressif/esp_lvgl_port) | Graphics, system, and display-port dependencies | Fetched by the ESP-IDF component manager; downloaded component sources are not committed |
+| [LVGL](https://github.com/lvgl/lvgl), [ESP-IDF](https://github.com/espressif/esp-idf), [esp_lvgl_port](https://components.espressif.com/components/espressif/esp_lvgl_port), [esp_codec_dev](https://components.espressif.com/components/espressif/esp_codec_dev) | Graphics, system, display-port, and audio codec dependencies | Fetched by the ESP-IDF component manager; downloaded component sources are not committed |
 
 **No repository-wide license has been selected yet.** The license notes above apply to their respective source material and do not assign Apache-2.0 or MIT to the whole repository. A license for the new code and an upstream-license review are still needed before public release. See [UPSTREAM.md](UPSTREAM.md) for the exact porting changes.

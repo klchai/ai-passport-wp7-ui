@@ -14,7 +14,8 @@
 - **Clock**：按键手动设置时间；设备断电后需重新设置，未设置时状态栏显示 `--:--`。
 - **Battery**：读取板载 CW2017 电量计的百分比与电压；读取失败时显示不可用。
 - **Stopwatch**：开始、暂停、记圈与重置；退出页面后仍继续计时。
-- **Focus**：可选 5／15／25／45 分钟计时；退出页面后仍继续计时。首页没有它的磁贴，请从应用列表打开。
+- **Focus**：可选 5／15／25／45 分钟预设，也可设为 1 到 99 分钟的任意时长；退出页面后仍继续计时，结束时喇叭会响起提示音。首页没有它的磁贴，请从应用列表打开。
+- **提示音**：板载 ES8311 音频芯片播放三个音的短提示音，每 1.5 秒一次，最长响一分钟；下一次按键只用来停止提示音。
 - **Kaboo**：显示今天、7 天或 30 天的 token 数和费用，以及用量最多的模型；数据同样由 Mac 上的 `tools/usage_bridge.py` 通过低功耗蓝牙推送。
 - **Claude**：显示 5 小时与 7 天额度用量及重置倒计时，数据由 Mac 上的 `tools/usage_bridge.py` 通过低功耗蓝牙推送。百分比和进度条平时使用主题色，用量达到 70% 变黄，达到 90% 变红。首次收到数据前显示 "Waiting for Mac"，超过 15 分钟未更新的数据标为过期；不会显示虚构用量。
 - 状态栏的 Wi-Fi 和电池图标沿用界面样式，不代表实际连接状态或实时电量；实际电量请看 Battery 页面。
@@ -40,7 +41,8 @@
 | Kaboo | 切换统计周期 | — | — | 返回 |
 | Claude | — | — | — | 返回 |
 | Stopwatch | 记圈／暂停时重置 | — | 开始／暂停 | 返回 |
-| Focus | 暂停时换时长／重置 | — | 开始／暂停 | 返回 |
+| Focus | 暂停时换下一个预设／重新开始 | 暂停时加／减 1 分钟 | 开始／暂停 | 返回 |
+| 任意页面（提示音响起时） | 停止提示音 | 停止提示音 | 停止提示音 | 停止提示音 |
 
 选中项有细边框提示，因为 Passport 没有触摸屏。
 
@@ -93,8 +95,8 @@ python tools/capture_wp7.py --port PORT \
 | 项目 | 在这里的用途 | 来源／授权信息 |
 | --- | --- | --- |
 | [ZyoungInc/JC4880P443C_BSP `wp7`](https://github.com/ZyoungInc/JC4880P443C_BSP/tree/wp7) | `main/wp7_ui.c` 的 WP7 页面、主题、动画和设置结构 | 基于提交 `9d1743a`；原文件标注 `SPDX-License-Identifier: Apache-2.0`；见 [移植记录](UPSTREAM.zh_CN.md) |
-| [FoloToy/ai-passport](https://github.com/FoloToy/ai-passport) | `components/passport_bsp` 的 Passport 显示、按键、I²C、电量计代码 | 原仓库 MIT License；本仓库为精简与适配版本 |
+| [FoloToy/ai-passport](https://github.com/FoloToy/ai-passport) | `components/passport_bsp` 的 Passport 显示、按键、I²C、电量计与 ES8311 音频代码 | 原仓库 MIT License；本仓库为精简与适配版本 |
 | [klchai/ai-passport-liquid-glass-ui](https://github.com/klchai/ai-passport-liquid-glass-ui) | `main/usage_model.*`、`main/usage_link.*`、`tools/usage_bridge.py` 与 `tests/test_usage_model.c` 中的 Kaboo 与 Claude 用量协议和低功耗蓝牙链路 | MIT License（FoloToy），全文见 `LICENSES/FoloToy-MIT.txt`；详见[移植说明](UPSTREAM.zh_CN.md) |
-| [LVGL](https://github.com/lvgl/lvgl)、[ESP-IDF](https://github.com/espressif/esp-idf)、[esp_lvgl_port](https://components.espressif.com/components/espressif/esp_lvgl_port) | 图形、系统与显示移植依赖 | 通过 ESP-IDF 组件管理器获取；不将下载的组件代码入库 |
+| [LVGL](https://github.com/lvgl/lvgl)、[ESP-IDF](https://github.com/espressif/esp-idf)、[esp_lvgl_port](https://components.espressif.com/components/espressif/esp_lvgl_port)、[esp_codec_dev](https://components.espressif.com/components/espressif/esp_codec_dev) | 图形、系统、显示移植与音频 codec 依赖 | 通过 ESP-IDF 组件管理器获取；不将下载的组件代码入库 |
 
 本仓库**尚未选择整体项目许可证**。上述许可证说明仅适用于对应来源文件，不能理解为整个仓库已经采用 Apache-2.0 或 MIT；正式公开发布前需要确定新增代码的授权并复核上游许可。具体移植改动见 [UPSTREAM.zh_CN.md](UPSTREAM.zh_CN.md)。

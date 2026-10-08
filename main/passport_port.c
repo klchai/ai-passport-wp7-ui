@@ -5,8 +5,10 @@
 #include "bsp_button.h"
 #include "bsp_battery.h"
 #include "bsp_display.h"
+#include "bsp_i2c.h"
 #include "wp7_capture.h"
 #include "usage_link.h"
+#include "wp7_sound.h"
 #include "esp_heap_caps.h"
 #include "esp_err.h"
 #include "esp_log.h"
@@ -78,6 +80,14 @@ void app_main(void)
     s_battery_updates = xQueueCreate(1, sizeof(battery_update_t));
     ESP_ERROR_CHECK(s_battery_updates ? ESP_OK : ESP_ERR_NO_MEM);
     ESP_ERROR_CHECK(bsp_button_init(button_cb, NULL));
+    /* The fuel gauge and the speaker codec share the I2C bus. Create it here
+       so their tasks never race to create it twice, which detaches the bus
+       pins (see bsp_i2c_scan). Each task reports its own failure. */
+    const esp_err_t i2c_err = bsp_i2c_init();
+    if (i2c_err != ESP_OK) {
+        ESP_LOGW(TAG, "I2C bus unavailable: %s", esp_err_to_name(i2c_err));
+    }
+    wp7_sound_init();
     if (xTaskCreate(battery_task, "passport_battery", 4096, NULL, 2, NULL) != pdPASS) {
         ESP_LOGW(TAG, "battery task unavailable");
         battery_update_t unavailable = { .soc = -1, .mv = -1 };
